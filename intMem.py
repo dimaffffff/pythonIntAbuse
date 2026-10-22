@@ -1,0 +1,268 @@
+import math
+CODES = [
+"OUT",
+"HALT",
+"DECL",
+"SET"
+]
+MAX_ARGS = 3
+ARG_MEM = 2
+INSTRUCTION_MEM = MAX_ARGS * ARG_MEM + 1
+PART_SIZE = 16
+PART_AMOUNT = 100
+OFFSET_MASK = 0xFFFF
+DEBUGMODE = False
+COREDUMP_ON_EXIT = False
+world:int = 0
+
+def printd(msg:str,mods:list[str] = []):
+    if DEBUGMODE:
+        if "NOEND" in mods:
+            print(msg,end="")
+        else:
+            print(msg)
+
+def DUMPCORE():
+    print("The atable is: ")
+    mask = ~((~0) << PART_AMOUNT)
+    atable = world & mask 
+    print(f"{atable:b}")
+    partIndex = 0 
+    while partIndex < PART_AMOUNT:
+        if (world >> partIndex) & 1:
+            mask = ~((~0) << PART_SIZE)
+            part = (world >> (PART_AMOUNT + PART_SIZE * partIndex)) & mask 
+            print(f"PARTITION #{partIndex} ({part}): {part:b}")
+        partIndex += 1
+
+
+def PANIC(msg:str,error:str):
+    print(f"{world:b}")
+    print("CORE DUMP: ")
+    DUMPCORE()
+    print("")
+    print(msg)
+    print(f"!!! {error.upper()} !!!")
+    exit()
+
+def alloc(amount:int):
+    global world
+    printd(f"can we allocate {amount} partitions... ",["NOEND"])
+    inrow = 0
+    index = 0 
+    amount = max(amount,1)
+
+    for i in range(PART_AMOUNT):
+        if inrow == amount:
+            index = i - inrow
+            break 
+        if not ((world >> i) & 1):
+            inrow += 1
+        else:
+            inrow = 0
+
+    if inrow != amount:
+        printd("no")
+        PANIC(f"Tried to allocate {amount} partitions but the allocator couldn't find enough free partitions", "out of memory")
+
+    if amount != 0:
+        mask = (~(~0 << inrow)) << index
+        world |= mask
+    printd(f"yes, to {index}")
+    return index
+
+def checkAlloc(index:int):
+    if index < PART_AMOUNT and index >= 0:
+        return bool((world >> index) & 1) 
+    else:
+        return False
+
+def sizeof(number:int):
+    if number < 0:
+        number *= -1
+    if number <= 1:
+        return 1
+    size = math.log(number,2)
+    return math.ceil(size) + 1
+
+def getOffset():
+    return world & OFFSET_MASK
+
+#ONLY POSITIVE INTEGERS
+def writePart(index:int,number:int): 
+    printd(f"can we write {number} into partition {index}... ",["NOEND"])
+    global world
+    size = sizeof(number)
+    if size > PART_SIZE: #in real world this usually wouldn't segfault but I don't want any silent memory corruption
+        printd("no")
+        PANIC(f"Tried to write {size} bits into a partition but the partition size is {PART_SIZE}","segmentation fault")
+
+    if number < 0:
+        printd("no")
+        PANIC(f"Tried to write {number} into partition {index} but it is negative", "INVALID ARGUMENT")
+
+    if not checkAlloc(index):
+        printd("no")
+        PANIC(f"Tried to write to partition {index} but it is unallocated","segmentation fault")
+
+    bitIndex = index * (PART_SIZE)
+    bitIndex += PART_AMOUNT
+    mask = ~(~0 << PART_SIZE)
+    mask = mask << bitIndex 
+    world &= (~mask)
+    mask = number
+    mask = mask << bitIndex
+    world |= mask
+    printd("yes")
+
+def readPart(index:int):
+    printd(f"can we read partition {index}... ", ["NOEND"])
+    if not checkAlloc(index):
+        printd("no")
+        PANIC(f"Tried to read partition {index} but it is unallocated","segmentation fault")
+    mask = ~(~0 << PART_SIZE)
+    value = (world >> (PART_SIZE * index) + PART_AMOUNT) & mask
+    printd(f"yes, it is {value}")
+    return value
+
+def writePack(index: int,numbers: list[int]):
+    printd(f"writing {numbers} into {index}")
+    for i in range(len(numbers)):
+        writePart(index + i,numbers[i])
+
+#The actual interpreter and parser
+
+#Parser
+
+#DOES NOT HANDLE STRING LITERALS AS A PROOF OF CONCEPT
+#This will write the code into any space given by the alloc() function
+def parse(code:str) -> int:
+    printd("---  PARSING ---")
+    memoryNeeded = INSTRUCTION_MEM * 2 #Memory needed for the program's code if we are being exact
+    for i in code:
+        if i == "\n":
+            memoryNeeded += INSTRUCTION_MEM
+    
+    #WRITE THE INSTRUCTIONS INTO THE MEMORY
+    variables = []
+    instructionPointer = alloc(memoryNeeded + 1) + 1 #+1 to account for the variable array
+    instructionStart = instructionPointer - 1
+    for i in code.splitlines():
+        if len(i) != 0:
+            printd(f"Trying to parse {i}")
+            splited = i.split()
+            printd(f"Split it into {splited}")
+            opcode = getInstructionCode(splited[0])
+            printd(f"And get the opcode - {opcode}")
+            args: list[int] = []
+
+            for j in splited[1:]:
+                processedArg = processArg(j,variables)
+                args.extend(processedArg)
+                printd(f"And obviously we get {processedArg} as our argument!")
+
+
+            pack = [opcode]
+            pack.extend(args)
+            writePack(instructionPointer,pack)
+            instructionPointer += INSTRUCTION_MEM
+
+    #ALLOCATE THE VARIABLE ARRAY
+    varArray= alloc(len(variables))
+    writePart(instructionStart,varArray)
+    return instructionStart
+
+
+#MUTATES THE VAR TABLE, does not handle string literals for now
+def processArg(arg:str,varTable:list[str]) -> list[int]:
+    argType = 0
+    argVal = arg[1:]
+    match arg[0]:
+        case "!":
+            argType = 1 #Treat this argument literally
+        case "#":
+            argType = 2 #What is the location of this variable?
+        case "*":
+            argType = 3 #What is the value of this variable?
+        case _:
+            argVal = arg #What is the location of the pointer? (argType 0)
+    if argType == 1:
+        argVal = int(argVal)
+    else:
+        if argVal not in varTable:
+            varTable.append(argVal)
+            printd(f"Appended {argVal} to varTable!")
+        argVal = varTable.index(argVal)
+    return [argType,argVal]
+
+def getInstructionCode(instruction: str) -> int: #More unstable than uranium and I don't care
+    if instruction in CODES:
+        return CODES.index(instruction)
+    else:
+        PANIC(f"{instruction} is not a valid instruction","invalid instruction")
+
+#Interpreter
+def startProg(instructions:int):
+    printd("--- INTERPRETER ---")
+    ic = 0
+    while True:
+        start = instructions +1+ ic * INSTRUCTION_MEM
+        code = readPart(start)
+        args: list[int] = []
+        for i in range(MAX_ARGS):
+            arg = []
+            for j in range(2):
+
+                arg.append(readPart(start + 1 + i * 2 + j))
+
+            args.append(procVar(arg,readPart(instructions)))
+
+        printd(f"ic is {ic}, opcode is {code}, args are {args}")
+        
+        execHandle(code,args)
+        ic += 1
+
+def execHandle(opcode:int,args:list[int]):
+    code = CODES[opcode]
+    printd(f"executing {code} with arguments: {args}")
+    func = f"h_{code}"
+    if func in globals():
+        globals()[func](args)
+    else:
+        PANIC(f"{code} is not a valid instruction","invalid instruction")
+
+def procVar(var:list[int],varArray:int) -> int:
+    if var[0] == 1:
+        return var[1]
+    elif var[0] == 2:
+        return readPart(var[1] + varArray)
+    elif var[0] == 3:
+        return readPart(readPart(var[1] + varArray))
+    else:
+        return var[1]
+    return 0
+
+def h_OUT(args: list[int]):
+    print(args[0])
+
+def h_HALT(args: list[int]):
+    if COREDUMP_ON_EXIT:
+        DUMPCORE()
+    exit()
+
+def h_DECL(args: list[int]):
+    varmem = alloc(args[1])
+    writePart(args[0] + readPart(readPart(0)),varmem)
+
+def h_SET(args: list[int]):
+    writePart(args[0],args[1])
+
+
+CODE = """
+DECL X !1
+SET #X !13
+OUT *X
+HALT
+"""
+writePart(alloc(1),parse(CODE))#This SHOULD reserve the first partition for the pointer to prog (crappy code but I am out of ideas)
+startProg(readPart(0))
