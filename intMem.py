@@ -1,16 +1,13 @@
 import math
 CODES = [
-"OUT",
-"HALT",
-"DECL",
-"SET"
+"OUT", "HALT", "DECL", "SET", "JUMP", "EQUAL", "NOT", "IF", "ADD"
 ]
+START_OFFSET = 2
 MAX_ARGS = 3
 ARG_MEM = 2
 INSTRUCTION_MEM = MAX_ARGS * ARG_MEM + 1
 PART_SIZE = 16
-PART_AMOUNT = 100
-OFFSET_MASK = 0xFFFF
+PART_AMOUNT = 256
 DEBUGMODE = False
 COREDUMP_ON_EXIT = False
 world:int = 0
@@ -45,7 +42,7 @@ def PANIC(msg:str,error:str):
     print(f"!!! {error.upper()} !!!")
     exit()
 
-def alloc(amount:int):
+def alloc(amount:int) -> int:
     global world
     printd(f"can we allocate {amount} partitions... ",["NOEND"])
     inrow = 0
@@ -84,9 +81,6 @@ def sizeof(number:int):
         return 1
     size = math.log(number,2)
     return math.ceil(size) + 1
-
-def getOffset():
-    return world & OFFSET_MASK
 
 #ONLY POSITIVE INTEGERS
 def writePart(index:int,number:int): 
@@ -145,8 +139,9 @@ def parse(code:str) -> int:
     
     #WRITE THE INSTRUCTIONS INTO THE MEMORY
     variables = []
-    instructionPointer = alloc(memoryNeeded + 1) + 1 #+1 to account for the variable array
-    instructionStart = instructionPointer - 1
+    instructionStart = alloc(memoryNeeded + START_OFFSET) 
+    instructionPointer = instructionStart + START_OFFSET
+    writePart(instructionPointer - (START_OFFSET - 1),0) #Write the ic into reserved index 1
     for i in code.splitlines():
         if len(i) != 0:
             printd(f"Trying to parse {i}")
@@ -180,12 +175,14 @@ def processArg(arg:str,varTable:list[str]) -> list[int]:
     match arg[0]:
         case "!":
             argType = 1 #Treat this argument literally
-        case "#":
-            argType = 2 #What is the location of this variable?
         case "*":
-            argType = 3 #What is the value of this variable?
+            argType = 2 #What is the location of this variable?
+        case "#":
+            argType = 0 #What is the location of the pointer?
         case _:
-            argVal = arg #What is the location of the pointer? (argType 0)
+            argVal = arg
+            argType = 3 #What is the value of this variable?
+
     if argType == 1:
         argVal = int(argVal)
     else:
@@ -195,32 +192,39 @@ def processArg(arg:str,varTable:list[str]) -> list[int]:
         argVal = varTable.index(argVal)
     return [argType,argVal]
 
-def getInstructionCode(instruction: str) -> int: #More unstable than uranium and I don't care
+def getInstructionCode(instruction: str) -> int:
     if instruction in CODES:
         return CODES.index(instruction)
     else:
         PANIC(f"{instruction} is not a valid instruction","invalid instruction")
+        return int(-3e1000)#just so my lsp shuts up
 
 #Interpreter
 def startProg(instructions:int):
     printd("--- INTERPRETER ---")
-    ic = 0
     while True:
-        start = instructions +1+ ic * INSTRUCTION_MEM
+        ic = readPart(instructions + 1)
+        start = instructions + START_OFFSET + ic * INSTRUCTION_MEM
         code = readPart(start)
         args: list[int] = []
         for i in range(MAX_ARGS):
             arg = []
             for j in range(2):
+                
+                argPtr = start + 1 + i * 2 + j
+                arg.append(readPart(argPtr))
+                printd(f"trying to process: {arg[-1]}")
 
-                arg.append(readPart(start + 1 + i * 2 + j))
 
             args.append(procVar(arg,readPart(instructions)))
+            printd(f"and we got: {args[-1]}")
+            arg.clear
 
         printd(f"ic is {ic}, opcode is {code}, args are {args}")
         
         execHandle(code,args)
-        ic += 1
+        if readPart(instructions+1) == ic: #check if the instruction modified the ic
+            writePart(instructions+1,ic+1)
 
 def execHandle(opcode:int,args:list[int]):
     code = CODES[opcode]
@@ -232,15 +236,14 @@ def execHandle(opcode:int,args:list[int]):
         PANIC(f"{code} is not a valid instruction","invalid instruction")
 
 def procVar(var:list[int],varArray:int) -> int:
-    if var[0] == 1:
+    if var[0] == 1: #!
         return var[1]
-    elif var[0] == 2:
+    elif var[0] == 2: #*
         return readPart(var[1] + varArray)
-    elif var[0] == 3:
+    elif var[0] == 3: # 
         return readPart(readPart(var[1] + varArray))
-    else:
-        return var[1]
-    return 0
+    else: # #
+        return var[1] + varArray
 
 def h_OUT(args: list[int]):
     print(args[0])
@@ -252,16 +255,44 @@ def h_HALT(args: list[int]):
 
 def h_DECL(args: list[int]):
     varmem = alloc(args[1])
-    writePart(args[0] + readPart(readPart(0)),varmem)
+    writePart(args[0],varmem)
 
 def h_SET(args: list[int]):
+    if args[0] == 0:
+        PANIC("Tried to execute SET but couldn't locate instruction","interpreter error")
     writePart(args[0],args[1])
+
+def h_JUMP(args: list[int]):
+    printd(f"trying to set ic to {args[0]}")
+    writePart(1 + readPart(0), args[0])
+
+def h_EQUAL(args: list[int]):
+    writePart(args[2],args[1] == args[0])
+
+def h_NOT(args: list[int]):
+    writePart(args[1],not args[0])
+
+def h_IF(args: list[int]):
+    if not args[0]:
+        ic = readPart(0) + 1
+        writePart(ic, readPart(ic) + 2)
+
+def h_ADD(args: list[int]):
+    h_SET([args[2],args[1]+args[0]])
 
 
 CODE = """
-DECL X !1
-SET #X !13
-OUT *X
+DECL #X !1
+DECL #running !1
+DECL #counter !1
+
+SET *X !13
+OUT X
+ADD counter !1 *counter
+EQUAL counter !5 *running 
+NOT running *running
+IF running
+JUMP !3
 HALT
 """
 writePart(alloc(1),parse(CODE))#This SHOULD reserve the first partition for the pointer to prog (crappy code but I am out of ideas)
