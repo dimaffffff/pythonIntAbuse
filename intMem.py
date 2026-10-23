@@ -94,7 +94,7 @@ def free(index:int,amount:int):
             printd("no")
             PANIC(f"tried to free partitions {index}-{end} but partition {offset} is not allocated", "double free")
         else:
-            writePart(offset,0)#in real life free() wouldn't clear the data but I don't want any unpredictable behaviour
+            writePart(offset,0)#in real world free() wouldn't clear the data but I don't want any unpredictable behaviour
 
     mask = ~(~((~0) << amount) << index)
     world &= mask
@@ -301,7 +301,7 @@ def startProg(instructions:int):
         code = readPart(start)
         args: list[int] = []
         for i in range(MAX_ARGS):
-            arg = []
+            arg: list[int] = []
             for j in range(2):
                 
                 argPtr = start + 1 + i * 2 + j
