@@ -1,23 +1,20 @@
 CODES = [
-"OUT", "HALT", "ALLOC", "SET", "JUMP", "EQUAL", "NOT", "IF", "ADD", "FREE", "DUMP"
+"OUT", "HALT", "ALLOC", "SET", "JUMP", "EQUAL", "NOT", "IF", "ADD", "FREE", "DUMP", "PRINTSTR", "LESS"
 ]
 #small test
 CODE = """
-ALLOC #X !1
 ALLOC #running !1
 ALLOC #counter !1
 
-SET *X !13
 .start
-OUT X
+
+PRINTSTR " hello world "
 ADD counter !1 *counter
 EQUAL counter !5 *running 
 NOT running *running
-IF running
-JUMP .start
-FREE #X !1
-FREE #counter !1
-FREE #running !1
+
+JUMP .start running
+
 HALT
 """
 
@@ -70,12 +67,12 @@ def alloc(amount:int) -> int:
 
     for i in range(PART_AMOUNT):
         if inrow == amount:
-            index = i - inrow
             break 
         if not ((world >> i) & 1):
             inrow += 1
         else:
             inrow = 0
+        index = i - inrow + 1
 
     if inrow != amount:
         printd("no")
@@ -112,7 +109,6 @@ def checkAlloc(index:int):
 def sizeof(number:int):
     return number.bit_length()
 
-#ONLY POSITIVE INTEGERS
 def writePart(index:int,number:int): 
     printd(f"can we write {number} into partition {index}... ",["NOEND"])
     global world
@@ -123,7 +119,7 @@ def writePart(index:int,number:int):
 
     if number < 0:
         printd("no")
-        PANIC(f"Tried to write {number} into partition {index} but it is negative", "INVALID ARGUMENT")
+        PANIC(f"Tried to write {number} into partition {index} but it is negative", "invalid argument")
 
     if not checkAlloc(index):
         printd("no")
@@ -154,6 +150,21 @@ def writePack(index: int,numbers: list[int]):
     for i in range(len(numbers)):
         writePart(index + i,numbers[i])
 
+def writeStr(index:int,string:str):
+    pack: list[int] = [len(string)]
+    for i in string:
+        pack.append(ord(i))
+    writePack(index,pack)
+
+def readStr(index:int) -> str:
+    strLen = readPart(index)
+    charPtr = index + 1
+    charList: list[str] = []
+    while charPtr - index < strLen + 1:
+        charList.append(chr(readPart(charPtr)))
+        charPtr += 1
+    return "".join(charList)
+
 #The actual interpreter and parser
 
 #Parser
@@ -175,22 +186,45 @@ def getTags(code:list[str]):
             _ = code.pop(i)
  
     return code,tags
+
+#MUTATES sLine
+def handleStrings(sLine:list[str]):
+    inStr = False
+    stringList:list[str] = []
+    i = 0
+    while i < len(sLine):
+        if sLine[i] == "\"":
+            inStr = not inStr
+            _= sLine.pop(i)
+            if not inStr:
+                string = " ".join(stringList)
+                strmem = alloc(len(string)+1) #Every string allocates memory, possibly leaking it, problems?
+                sLine.insert(i,f"!{strmem}")
+                writeStr(strmem,string)
+                stringList.clear()
+            else:
+                i -= 1
+        else:
+            if inStr:
+                stringList.append(sLine.pop(i))
+                i -= 1
+        i += 1
+
+
  
 #This will write the code into any space given by the alloc() function
 def parse(code:str) -> int:
     printd("---  PARSING ---")
     memoryNeeded = INSTRUCTION_MEM * 2 #Memory needed for the program's code if we are being exact
-    for i in code:
-        if i == "\n":
-            memoryNeeded += INSTRUCTION_MEM
 
     codeLines = code.splitlines()
     codeLines, tags = getTags(codeLines)
     printd(f"{codeLines}")
     printd(f"{tags}")
     
+    memoryNeeded += len(codeLines) * INSTRUCTION_MEM
     #WRITE THE INSTRUCTIONS INTO THE MEMORY
-    variables = []
+    variables: list[str] = []
     instructionStart = alloc(memoryNeeded + START_OFFSET) 
     instructionPointer = instructionStart + START_OFFSET
     writePart(instructionPointer - (START_OFFSET - 1),0) #Write the ic into reserved index 1
@@ -199,6 +233,7 @@ def parse(code:str) -> int:
             printd(f"Trying to parse {i}")
             splited = i.split()
             printd(f"Split it into {splited}")
+            handleStrings(splited)
             opcode = getInstructionCode(splited[0])
             printd(f"And get the opcode - {opcode}")
             args: list[int] = []
@@ -206,7 +241,7 @@ def parse(code:str) -> int:
             for j in splited[1:]:
                 processedArg = processArg(j,variables,tags)
                 args.extend(processedArg)
-                printd(f"And obviously we get {processedArg} as our argument!")
+                printd(f"We get {processedArg} as our argument")
 
 
             pack = [opcode]
@@ -218,7 +253,6 @@ def parse(code:str) -> int:
     varArray= alloc(len(variables))
     writePart(instructionStart,varArray)
     return instructionStart
-
 
 #MUTATES THE VAR TABLE, does not handle string literals for now
 def processArg(arg:str,varTable:list[str],tags:dict[str,int]) -> list[int]:
@@ -322,14 +356,15 @@ def h_SET(args: list[int]):
     writePart(args[0],args[1])
 
 def h_JUMP(args: list[int]):
-    printd(f"trying to set ic to {args[0]}")
-    writePart(1 + readPart(0), args[0])
+    if args[1] == 1:
+        printd(f"trying to set ic to {args[0]}")
+        writePart(1 + readPart(0), args[0])
 
 def h_EQUAL(args: list[int]):
-    writePart(args[2],args[1] == args[0])
+    h_SET([args[2],args[1] == args[0]])
 
 def h_NOT(args: list[int]):
-    writePart(args[1],not args[0])
+    h_SET([args[1],not args[0]])
 
 def h_IF(args: list[int]):
     if not args[0]:
@@ -346,11 +381,17 @@ def h_FREE(args:list[int]):
 def h_DUMP(args: list[int]):
     DUMPCORE()
 
+def h_LESS(args: list[int]):
+    h_SET([args[2],args[0]<args[1]])
+
+def h_PRINTSTR(args: list[int]):
+    print(readStr(args[0]))
+
 
 if checkAlloc(0):
     free(0,1)
+
 writePart(alloc(1),parse(CODE))#This SHOULD reserve the first partition for the pointer to prog (crappy code but I am out of ideas)
 
 startProg(readPart(0))
-
 
