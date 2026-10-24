@@ -1,32 +1,116 @@
 CODES = [
-"OUT", "HALT", "ALLOC", "SET", "JUMP", "EQUAL", "NOT", "IF", "ADD", "FREE", "DUMP", "PRINTSTR", "LESS"
+"OUT", "HALT", "ALLOC", "SET", "JUMP", "EQUAL", "NOT", "IF", "ADD", "FREE", "DUMP", "PRINTSTR", "LESS", "INPUT", "STRTOINT", "TRACE", "RETURN", "AND", 
+"MULT", "COMMENT", "VAR", "FVAR", "LIST", "APPEND", "POP", "INTTOSTR", "CONC"
 ]
 #small test
 CODE = """
-ALLOC #running !1
-ALLOC #counter !1
+TRACE
+JUMP .allocateBasics !1
 
-.start
+VAR #duration
 
-PRINTSTR " hello world "
-ADD counter !1 *counter
-EQUAL counter !5 *running 
-NOT running *running
+TRACE
+JUMP .getDuration !1
 
-JUMP .start running
+SET *duration ret
+MULT duration !60 *duration
+
+SET *arg1 duration
+LIST #songs
+TRACE
+JUMP .getSongAmount !1
+
+VAR #songCount
+VAR #totalSongs
+SET *songCount ret2
 
 HALT
+.getSongAmount
+VAR #songCounter
+VAR #total
+VAR #loopCond
+VAR #songDur
+
+.songLoop
+INPUT " enter duration of a song in seconds > " *songDur
+STRTOINT songDur *songDur
+ADD songDur total *total
+ADD songCounter !1 *songCounter
+COMMENT " 'songs' is basically a global here cuz I am lazy "
+APPEND songDur *songs 
+LESS total arg1 *loopCond
+JUMP .songLoop loopCond
+
+PRINTSTR " You have entered enough songs "
+SET *ret total
+COMMENT " arg2 is used as a second return value here "
+SET *ret2 songCounter
+
+FVAR #total
+FVAR #loopCond
+FVAR #songDur
+FVAR #songCounter
+RETURN
+
+.allocateBasics
+VAR #tmp 
+VAR #arg1 
+VAR #arg2
+VAR #ret
+VAR #ret2
+
+RETURN
+
+.getDuration
+VAR #tmpDur 
+VAR #tmpInvalid 
+VAR #condMin 
+VAR #condMax
+
+.durLoopStart
+INPUT " What is the duration of the training session? > " *tmp
+STRTOINT tmp *tmpDur
+
+LESS !9 tmpDur *condMin
+LESS tmpDur !31 *condMax
+AND condMin condMax *tmpInvalid
+NOT tmpInvalid *tmpInvalid
+
+JUMP .invalidDur tmpInvalid
+
+SET *ret tmpDur
+
+FVAR #tmpDur 
+FVAR #tmpInvalid 
+FVAR #condMin 
+FVAR #condMax
+
+RETURN
+.invalidDur
+PRINTSTR " Invalid session duration (must be 10-30 mins) "
+JUMP .durLoopStart !1
 """
 
-START_OFFSET = 2
+CALL_BUFFER_SIZE = 16
+START_OFFSET = 3
 MAX_ARGS = 3
 ARG_MEM = 2
 INSTRUCTION_MEM = MAX_ARGS * ARG_MEM + 1
 PART_SIZE = 16
-PART_AMOUNT = 256
+PART_AMOUNT = 4096
 DEBUGMODE = False
+INTERPRETER_DEBUG = False
 COREDUMP_ON_EXIT = False
+PRINT_VARTABLE_NAVIGATION = False
 world:int = 0
+
+def printv(msg:str):
+    if PRINT_VARTABLE_NAVIGATION:
+        print(msg)
+
+def printi(msg:str):
+    if INTERPRETER_DEBUG:
+        print(msg)
 
 def printd(msg:str,mods:list[str] = []):
     if DEBUGMODE:
@@ -45,12 +129,12 @@ def DUMPCORE():
         if (world >> partIndex) & 1:
             mask = ~((~0) << PART_SIZE)
             part = (world >> (PART_AMOUNT + PART_SIZE * partIndex)) & mask 
-            print(f"PARTITION #{partIndex} ({part}): {part:b}")
+            print(f"#{partIndex}: {part} ",end="")
         partIndex += 1
+    print()
 
 
 def PANIC(msg:str,error:str):
-    print(f"{world:b}")
     print("CORE DUMP: ")
     DUMPCORE()
     print("")
@@ -165,10 +249,47 @@ def readStr(index:int) -> str:
         charPtr += 1
     return "".join(charList)
 
+def initList(item:int) -> int: #linked list to be exact
+    mem = alloc(2)
+    writePack(mem,[item,0]) #null pointer is the list's terminator
+    return mem
+
+def getItemList(list:int,index:int) -> int:
+    item = list 
+    count = 0
+    while True:
+        nextItem = readPart(item+1)
+        if count == index:
+            break
+        elif nextItem == 0:
+            if index != -1:
+                PANIC(f"Tried to access index {index} but the list (in partition {list}) is not big enough","out of bounds")
+            break 
+        count += 1
+        item = nextItem
+    return item
+
+def appendList(list:int,item:int):
+    newItem = initList(item)
+    lastItem = getItemList(list,-1)
+    writePart(lastItem+1,newItem)
+
+#Pops the index ONE in the list
+def popList(list:int)->int:
+    lastItem = getItemList(list,-1)
+    if lastItem == list:
+        PANIC("Attempted to pop an item of an empty list","out of bounds")
+    poppedItem = getItemList(list,1)
+    if lastItem != poppedItem:
+        nextItem = getItemList(list,2)
+    else:
+        nextItem = 0
+    writePart(list+1,nextItem)
+    return poppedItem
+
 #The actual interpreter and parser
 
 #Parser
-#DOES NOT HANDLE STRING LITERALS AS A PROOF OF CONCEPT
 
 #MUTATES code
 def getTags(code:list[str]):    
@@ -227,7 +348,10 @@ def parse(code:str) -> int:
     variables: list[str] = []
     instructionStart = alloc(memoryNeeded + START_OFFSET) 
     instructionPointer = instructionStart + START_OFFSET
-    writePart(instructionPointer - (START_OFFSET - 1),0) #Write the ic into reserved index 1
+    writePart(instructionStart + 1,0) #Write the ic into reserved index 1
+    callBuffer = alloc(CALL_BUFFER_SIZE+1)
+    writePart(instructionStart + 2,callBuffer) #Write the call buffer pointer into index 2
+    writePart(callBuffer,0) #Set the current buffer size to 0
     for i in codeLines:
         if len(i) != 0:
             printd(f"Trying to parse {i}")
@@ -281,7 +405,9 @@ def processArg(arg:str,varTable:list[str],tags:dict[str,int]) -> list[int]:
     else:
         if argVal not in varTable:
             varTable.append(argVal)
+            printv(f"{argVal} is {(len(varTable) - 1)}")
             printd(f"Appended {argVal} to varTable!")
+            
         argVal = varTable.index(argVal)
     return [argType,argVal]
 
@@ -313,7 +439,7 @@ def startProg(instructions:int):
             printd(f"and we got: {args[-1]}")
             arg.clear
 
-        printd(f"ic is {ic}, opcode is {code}, args are {args}")
+        printi(f"ic is {ic}, opcode is {code}, args are {args}")
         
         execHandle(code,args)
         if readPart(instructions+1) == ic: #check if the instruction modified the ic
@@ -321,7 +447,8 @@ def startProg(instructions:int):
 
 def execHandle(opcode:int,args:list[int]):
     code = CODES[opcode]
-    printd(f"executing {code} with arguments: {args}")
+    printi(f"executing {code} with arguments: {args}")
+
     func = f"h_{code}"
     if func in globals():
         globals()[func](args)
@@ -349,6 +476,12 @@ def h_HALT(args: list[int]):
 def h_ALLOC(args: list[int]):
     varmem = alloc(args[1])
     writePart(args[0],varmem)
+
+def h_VAR(args:list[int]):
+    h_ALLOC([args[0],1])
+
+def h_FVAR(args:list[int]):
+    h_FREE([args[0],1])
 
 def h_SET(args: list[int]):
     if args[0] == 0:
@@ -382,10 +515,62 @@ def h_DUMP(args: list[int]):
     DUMPCORE()
 
 def h_LESS(args: list[int]):
-    h_SET([args[2],args[0]<args[1]])
+    h_SET([args[2],args[0] < args[1]])
 
 def h_PRINTSTR(args: list[int]):
     print(readStr(args[0]))
+
+def h_INPUT(args: list[int]):
+    usrInput = input(readStr(args[0]))
+    strmem = alloc(len(usrInput) + 1)
+    writeStr(strmem,usrInput)
+    h_SET([args[1],strmem])
+    
+def h_TRACE(args: list[int]):
+    prog = readPart(0)
+    buffer = readPart(prog+2)
+    newElement = readPart(buffer) + 1
+    ic = readPart(prog+1)
+    writePart(newElement+buffer,ic)
+    writePart(buffer,newElement)
+
+def h_RETURN(args: list[int]):
+    prog = readPart(0)
+    buffer = readPart(prog+2)
+    lastElement = readPart(buffer)
+    if lastElement == 0:
+        PANIC("Tried to RETURN, but the call buffer is empty!","invalid use")
+    ic = readPart(buffer+lastElement) + 2 #skip the TRACE and the next instruction for funsies
+    writePart(prog+1,ic)
+    writePart(buffer,lastElement-1)
+
+def h_STRTOINT(args: list[int]):
+    string = readStr(args[0])
+    if len(string) > 0:
+        converted = int(string)
+    else:
+        converted = 0 #this treats empty strings as 0
+    h_SET([args[1],converted])
+
+def h_AND(args: list[int]):
+    h_SET([args[2],args[0] and args[1]])
+
+def h_MULT(args:list[int]):
+    h_SET([args[2],args[0] * args[1]])
+
+def h_COMMENT(args:list[int]):
+    pass
+
+def h_LIST(args:list[int]):
+    writePart(args[0],initList(0))
+
+def h_APPEND(args:list[int]):
+    appendList(args[1],args[0])
+
+def h_POP(args:list[int]):
+    item = readPart(popList(args[0]))
+    h_SET([args[1], item])
+
 
 
 if checkAlloc(0):
