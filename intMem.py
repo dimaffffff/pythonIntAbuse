@@ -1,6 +1,8 @@
+import random
+
 CODES = [
 "OUT", "HALT", "ALLOC", "SET", "JUMP", "EQUAL", "NOT", "IF", "ADD", "FREE", "DUMP", "PRINTSTR", "LESS", "INPUT", "STRTOINT", "TRACE", "RETURN", "AND", 
-"MULT", "COMMENT", "VAR", "FVAR", "LIST", "APPEND", "POP", "INTTOSTR", "CONC"
+"MULT", "COMMENT", "VAR", "FVAR", "LIST", "APPEND", "POP", "INTTOSTR", "CONC", "RANDOM"
 ]
 #small test
 CODE = """
@@ -20,11 +22,55 @@ LIST #songs
 TRACE
 JUMP .getSongAmount !1
 
-VAR #songCount
+VAR #songCounter
 VAR #totalSongs
-SET *songCount ret2
+SET *totalSongs ret
+SET *songCounter ret2
+
+TRACE
+JUMP .displaySongs !1
 
 HALT
+
+COMMENT " This 'function' throws away the very idea of scope "
+.displaySongs
+VAR #counter
+SET *counter !1
+VAR #strSongCounter
+INTTOSTR songCounter *strSongCounter
+VAR #msg
+CONC " number of songs played: " strSongCounter *msg
+PRINTSTR msg
+VAR #foamMachine
+RANDOM !1 songCounter *foamMachine
+VAR #loopCond
+VAR #curSong
+VAR #strCurSong
+VAR #ifCond
+
+COMMENT " lets imagine this is a fixed loop "
+.displayLoop
+DUMP
+POP *songs *curSong
+EQUAL curSong !0 *loopCond
+JUMP .endLoop loopCond
+INTTOSTR curSong *strCurSong
+CONC counter " : " *msg
+CONC msg strCurSong *msg
+PRINTSTR msg
+EQUAL foamMachine counter *ifCond
+TRACE
+JUMP .foamMachineStart ifCond
+
+ADD counter !1 *counter
+JUMP .displayLoop !1
+.endLoop
+
+RETURN
+.foamMachineStart
+PRINTSTR " Start the foam machine "
+RETURN
+
 .getSongAmount
 VAR #songCounter
 VAR #total
@@ -43,7 +89,6 @@ JUMP .songLoop loopCond
 
 PRINTSTR " You have entered enough songs "
 SET *ret total
-COMMENT " arg2 is used as a second return value here "
 SET *ret2 songCounter
 
 FVAR #total
@@ -99,9 +144,9 @@ INSTRUCTION_MEM = MAX_ARGS * ARG_MEM + 1
 PART_SIZE = 16
 PART_AMOUNT = 4096
 DEBUGMODE = False
-INTERPRETER_DEBUG = False
+INTERPRETER_DEBUG = True
 COREDUMP_ON_EXIT = False
-PRINT_VARTABLE_NAVIGATION = False
+PRINT_VARTABLE_NAVIGATION = True
 world:int = 0
 
 def printv(msg:str):
@@ -129,7 +174,7 @@ def DUMPCORE():
         if (world >> partIndex) & 1:
             mask = ~((~0) << PART_SIZE)
             part = (world >> (PART_AMOUNT + PART_SIZE * partIndex)) & mask 
-            print(f"#{partIndex}: {part} ",end="")
+            print(f"#{partIndex}: ({part}) ",end="")
         partIndex += 1
     print()
 
@@ -249,6 +294,11 @@ def readStr(index:int) -> str:
         charPtr += 1
     return "".join(charList)
 
+def allocStr(string:str)->int:
+    strmem = alloc(len(string)+1)
+    writeStr(strmem,string)
+    return strmem
+
 def initList(item:int) -> int: #linked list to be exact
     mem = alloc(2)
     writePack(mem,[item,0]) #null pointer is the list's terminator
@@ -278,7 +328,7 @@ def appendList(list:int,item:int):
 def popList(list:int)->int:
     lastItem = getItemList(list,-1)
     if lastItem == list:
-        PANIC("Attempted to pop an item of an empty list","out of bounds")
+        return 0
     poppedItem = getItemList(list,1)
     if lastItem != poppedItem:
         nextItem = getItemList(list,2)
@@ -375,6 +425,7 @@ def parse(code:str) -> int:
 
     #ALLOCATE THE VARIABLE ARRAY
     varArray= alloc(len(variables))
+    printv(f"The vartable starts at partition {varArray}")
     writePart(instructionStart,varArray)
     return instructionStart
 
@@ -412,11 +463,9 @@ def processArg(arg:str,varTable:list[str],tags:dict[str,int]) -> list[int]:
     return [argType,argVal]
 
 def getInstructionCode(instruction: str) -> int:
-    if instruction in CODES:
-        return CODES.index(instruction)
-    else:
+    if instruction not in CODES:
         PANIC(f"{instruction} is not a valid instruction","invalid instruction")
-        return int(-3e1000)#just so my lsp shuts up
+    return CODES.index(instruction)
 
 #Interpreter
 def startProg(instructions:int):
@@ -571,7 +620,23 @@ def h_POP(args:list[int]):
     item = readPart(popList(args[0]))
     h_SET([args[1], item])
 
+def h_INTTOSTR(args:list[int]):
+    num = str(args[0])
+    strmem = allocStr(num)
+    h_SET([args[1],strmem])
 
+
+#I don't really want to implement concatenation myself so I'll just hand it over to python
+def h_CONC(args:list[int]):
+    s1 = readStr(args[0])
+    s2 = readStr(args[1])
+    concstr = s1+s2 
+    mem = allocStr(concstr)
+    h_SET([args[2],mem])
+
+def h_RANDOM(args:list[int]):
+    h_SET([args[2],random.randint(args[0],args[1])])
+    
 
 if checkAlloc(0):
     free(0,1)
