@@ -30,6 +30,12 @@ SET *songCounter ret2
 TRACE
 JUMP .displaySongs !1
 
+VAR #strTotal
+VAR #totalMsg
+INTTOSTR totalSongs *strTotal
+CONC " The total length of the training session was " strTotal *totalMsg
+PRINTSTR totalMsg
+
 HALT
 
 COMMENT " This 'function' throws away the very idea of scope "
@@ -47,15 +53,16 @@ VAR #loopCond
 VAR #curSong
 VAR #strCurSong
 VAR #ifCond
+VAR #strCounter
 
 COMMENT " lets imagine this is a fixed loop "
 .displayLoop
-DUMP
 POP *songs *curSong
-EQUAL curSong !0 *loopCond
+EQUAL curSong !1 *loopCond
 JUMP .endLoop loopCond
+INTTOSTR counter *strCounter
 INTTOSTR curSong *strCurSong
-CONC counter " : " *msg
+CONC strCounter " : " *msg
 CONC msg strCurSong *msg
 PRINTSTR msg
 EQUAL foamMachine counter *ifCond
@@ -144,7 +151,7 @@ INSTRUCTION_MEM = MAX_ARGS * ARG_MEM + 1
 PART_SIZE = 16
 PART_AMOUNT = 4096
 DEBUGMODE = False
-INTERPRETER_DEBUG = True
+INTERPRETER_DEBUG = False
 COREDUMP_ON_EXIT = False
 PRINT_VARTABLE_NAVIGATION = True
 world:int = 0
@@ -298,6 +305,10 @@ def allocStr(string:str)->int:
     strmem = alloc(len(string)+1)
     writeStr(strmem,string)
     return strmem
+
+#apparently leaking 3 tons of memory is not the solution!
+def freeStr(index:int):
+    pass
 
 def initList(item:int) -> int: #linked list to be exact
     mem = alloc(2)
@@ -630,7 +641,7 @@ def h_INTTOSTR(args:list[int]):
 def h_CONC(args:list[int]):
     s1 = readStr(args[0])
     s2 = readStr(args[1])
-    concstr = s1+s2 
+    concstr = s1+" "+s2 
     mem = allocStr(concstr)
     h_SET([args[2],mem])
 
