@@ -277,7 +277,7 @@ def readPart(index:int):
         printd("no")
         PANIC(f"Tried to read partition {index} but it is unallocated","segmentation fault")
     mask = ~(~0 << PART_SIZE)
-    value = (world >> (PART_SIZE * index) + PART_AMOUNT) & mask
+    value = (world >> (PART_SIZE * index + PART_AMOUNT)) & mask
     printd(f"yes, it is {value}")
     return value
 
@@ -305,10 +305,6 @@ def allocStr(string:str)->int:
     strmem = alloc(len(string)+1)
     writeStr(strmem,string)
     return strmem
-
-#apparently leaking 3 tons of memory is not the solution!
-def freeStr(index:int):
-    pass
 
 def initList(item:int) -> int: #linked list to be exact
     mem = alloc(2)
@@ -440,7 +436,7 @@ def parse(code:str) -> int:
     writePart(instructionStart,varArray)
     return instructionStart
 
-#MUTATES THE VAR TABLE, does not handle string literals for now
+#MUTATES THE VAR TABLE
 def processArg(arg:str,varTable:list[str],tags:dict[str,int]) -> list[int]:
     argType = 0
     argVal = arg[1:]
