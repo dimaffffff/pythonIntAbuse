@@ -153,7 +153,7 @@ PART_AMOUNT = 4096
 DEBUGMODE = False
 INTERPRETER_DEBUG = False
 COREDUMP_ON_EXIT = False
-PRINT_VARTABLE_NAVIGATION = True
+PRINT_VARTABLE_NAVIGATION = False
 world:int = 0
 
 def printv(msg:str):
@@ -645,6 +645,7 @@ def h_CONC(args:list[int]):
     mem = allocStr(concstr)
     h_SET([args[2],mem])
 
+#And I don't want to implement random either
 def h_RANDOM(args:list[int]):
     h_SET([args[2],random.randint(args[0],args[1])])
     
@@ -652,7 +653,8 @@ def h_RANDOM(args:list[int]):
 if checkAlloc(0):
     free(0,1)
 
-writePart(alloc(1),parse(CODE))#This SHOULD reserve the first partition for the pointer to prog (crappy code but I am out of ideas)
+#This SHOULD reserve the first partition for the pointer to prog (crappy code but I am out of ideas)
+writePart(alloc(1),parse(CODE))
 
 startProg(readPart(0))
 
